@@ -1,1 +1,883 @@
+import React, { useState, useEffect } from 'react';
+import { Calculator, Download, Upload, Plus, Trash2, Save, FileText, AlertCircle, CheckCircle, RotateCcw, BarChart3, TrendingUp } from 'lucide-react';
+import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ReferenceLine, ScatterChart, Scatter } from 'recharts';
 
+const BVReferenceIntervalTool = () => {
+  const [analytes, setAnalytes] = useState([
+    {
+      id: 1,
+      name: 'Glucose',
+      unit: 'mg/dL',
+      referenceValues: [],
+      cvi: 5.7,
+      cvg: 6.3,
+      cva: 2.1,
+      distribution: 'normal',
+      partitionBy: 'none'
+    }
+  ]);
+  
+  const [activeAnalyte, setActiveAnalyte] = useState(0);
+  const [results, setResults] = useState(null);
+  const [showGraphs, setShowGraphs] = useState(false);
+  const [saveMessage, setSaveMessage] = useState('');
+
+  useEffect(() => {
+    const loadData = async () => {
+      try {
+        const stored = await window.storage.get('bv-analytes');
+        if (stored && stored.value) {
+          setAnalytes(JSON.parse(stored.value));
+        }
+      } catch (error) {
+        console.log('No stored data found or error loading:', error);
+      }
+    };
+    loadData();
+  }, []);
+
+  const saveToCloud = async () => {
+    try {
+      await window.storage.set('bv-analytes', JSON.stringify(analytes));
+      setSaveMessage('Data saved successfully!');
+      setTimeout(() => setSaveMessage(''), 3000);
+    } catch (error) {
+      setSaveMessage('Error saving data: ' + error.message);
+      setTimeout(() => setSaveMessage(''), 3000);
+    }
+  };
+
+  const resetCurrentAnalyte = () => {
+    if (window.confirm('Are you sure you want to reset this analyte? This will clear all data.')) {
+      const updated = [...analytes];
+      updated[activeAnalyte] = {
+        ...updated[activeAnalyte],
+        referenceValues: [],
+        cvi: 0,
+        cvg: 0,
+        cva: 0
+      };
+      setAnalytes(updated);
+      setResults(null);
+      setSaveMessage('Analyte reset');
+      setTimeout(() => setSaveMessage(''), 2000);
+    }
+  };
+
+  const resetAll = () => {
+    if (window.confirm('Are you sure you want to reset ALL analytes? This will clear all data.')) {
+      setAnalytes([{
+        id: Date.now(),
+        name: 'New Analyte',
+        unit: '',
+        referenceValues: [],
+        cvi: 0,
+        cvg: 0,
+        cva: 0,
+        distribution: 'normal',
+        partitionBy: 'none'
+      }]);
+      setActiveAnalyte(0);
+      setResults(null);
+      setSaveMessage('All data reset');
+      setTimeout(() => setSaveMessage(''), 2000);
+    }
+  };
+
+  const addAnalyte = () => {
+    const newAnalyte = {
+      id: Date.now(),
+      name: `Analyte ${analytes.length + 1}`,
+      unit: '',
+      referenceValues: [],
+      cvi: 0,
+      cvg: 0,
+      cva: 0,
+      distribution: 'normal',
+      partitionBy: 'none'
+    };
+    setAnalytes([...analytes, newAnalyte]);
+    setActiveAnalyte(analytes.length);
+  };
+
+  const removeAnalyte = (index) => {
+    if (analytes.length === 1) {
+      alert('Cannot remove the last analyte');
+      return;
+    }
+    const newAnalytes = analytes.filter((_, i) => i !== index);
+    setAnalytes(newAnalytes);
+    setActiveAnalyte(Math.max(0, index - 1));
+  };
+
+  const updateAnalyte = (field, value) => {
+    const updated = [...analytes];
+    updated[activeAnalyte][field] = value;
+    setAnalytes(updated);
+  };
+
+  const addReferenceValue = () => {
+    const updated = [...analytes];
+    updated[activeAnalyte].referenceValues.push('');
+    setAnalytes(updated);
+  };
+
+  const updateReferenceValue = (index, value) => {
+    const updated = [...analytes];
+    updated[activeAnalyte].referenceValues[index] = value;
+    setAnalytes(updated);
+  };
+
+  const removeReferenceValue = (index) => {
+    const updated = [...analytes];
+    updated[activeAnalyte].referenceValues.splice(index, 1);
+    setAnalytes(updated);
+  };
+
+  const calculateReference = () => {
+    const analyte = analytes[activeAnalyte];
+    const values = analyte.referenceValues
+      .map(v => parseFloat(v))
+      .filter(v => !isNaN(v));
+
+    if (values.length < 6) {
+      alert('Please enter at least 6 reference values (recommended: 16+)');
+      return;
+    }
+
+    const n = values.length;
+    const cvi = analyte.cvi / 100;
+    const cvg = analyte.cvg / 100;
+    const cva = analyte.cva / 100;
+
+    let psp, lowerLimit, upperLimit, tvPsp, cvPop;
+
+    const mean = values.reduce((sum, v) => sum + v, 0) / n;
+    const variance = values.reduce((sum, v) => sum + Math.pow(v - mean, 2), 0) / (n - 1);
+    const stdDev = Math.sqrt(variance);
+    const median = [...values].sort((a, b) => a - b)[Math.floor(n / 2)];
+
+    if (analyte.distribution === 'normal') {
+      psp = mean;
+      cvPop = Math.sqrt(((n + 1) / n) * (cvi ** 2 + cvg ** 2 + cva ** 2));
+      tvPsp = 1.96 * cvPop;
+      lowerLimit = psp - (psp * tvPsp);
+      upperLimit = psp + (psp * tvPsp);
+    } else {
+      const lnValues = values.map(v => Math.log(v));
+      const mu = lnValues.reduce((sum, v) => sum + v, 0) / n;
+      const lnVariance = lnValues.reduce((sum, v) => sum + (v - mu) ** 2, 0) / (n - 1);
+      
+      psp = Math.exp(mu + 0.5 * lnVariance);
+      const sdStar = Math.sqrt(cvi ** 2 + cvg ** 2 + cva ** 2);
+      
+      lowerLimit = Math.exp(mu + 0.5 * lnVariance - 1.96 * sdStar);
+      upperLimit = Math.exp(mu + 0.5 * lnVariance + 1.96 * sdStar);
+      
+      cvPop = Math.sqrt(((n + 1) / n) * (cvi ** 2 + cvg ** 2 + cva ** 2));
+      tvPsp = 1.96 * cvPop;
+    }
+
+    const minSamples = Math.max(16, Math.ceil(8 * (cvg ** 2 / (0.25 * (cvi ** 2 + cvg ** 2 + cva ** 2)))));
+    const withinInterval = values.filter(v => v >= lowerLimit && v <= upperLimit).length;
+    const coverageRate = (withinInterval / n) * 100;
+
+    setResults({
+      psp: psp.toFixed(3),
+      lowerLimit: lowerLimit.toFixed(3),
+      upperLimit: upperLimit.toFixed(3),
+      cvPop: (cvPop * 100).toFixed(2),
+      tvPsp: (tvPsp * 100).toFixed(2),
+      nSamples: n,
+      minSamples: minSamples,
+      range: (upperLimit - lowerLimit).toFixed(3),
+      mean: mean.toFixed(3),
+      median: median.toFixed(3),
+      stdDev: stdDev.toFixed(3),
+      cv: ((stdDev / mean) * 100).toFixed(2),
+      coverageRate: coverageRate.toFixed(1),
+      withinInterval: withinInterval,
+      rawValues: values
+    });
+
+    setShowGraphs(true);
+  };
+
+  const importCSV = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const text = event.target.result;
+      const lines = text.split('\n').map(line => line.trim()).filter(line => line);
+      
+      const values = [];
+      
+      lines.forEach(line => {
+        const cleaned = line.replace(/[^\d.-]/g, '');
+        const value = parseFloat(cleaned);
+        if (!isNaN(value) && value !== 0) {
+          values.push(value.toString());
+        }
+      });
+
+      if (values.length > 0) {
+        const updated = [...analytes];
+        updated[activeAnalyte].referenceValues = values;
+        setAnalytes(updated);
+        setSaveMessage(`Imported ${values.length} values`);
+        setTimeout(() => setSaveMessage(''), 3000);
+      } else {
+        alert('No valid numeric values found in the file');
+      }
+    };
+    reader.readAsText(file);
+    e.target.value = '';
+  };
+
+  const exportComprehensiveReport = () => {
+    const analyte = analytes[activeAnalyte];
+    const timestamp = new Date().toLocaleString();
+    
+    let report = `BV-BASED REFERENCE INTERVAL ANALYSIS REPORT\n`;
+    report += `${'='.repeat(80)}\n\n`;
+    report += `Generated: ${timestamp}\n`;
+    report += `Method: Dr. Abdurrahman Coskun BV-Based Population Reference Interval Model\n`;
+    report += `Reference: Clinical Chemistry 2024;70(10):1279-1290\n\n`;
+    report += `${'='.repeat(80)}\n\n`;
+    report += `ANALYTE INFORMATION\n`;
+    report += `${'-'.repeat(80)}\n`;
+    report += `Analyte Name: ${analyte.name}\n`;
+    report += `Unit: ${analyte.unit}\n`;
+    report += `Distribution Type: ${analyte.distribution}\n`;
+    report += `Number of Reference Individuals: ${analyte.referenceValues.length}\n\n`;
+    report += `BIOLOGICAL VARIATION DATA\n`;
+    report += `${'-'.repeat(80)}\n`;
+    report += `Within-Subject CV (CVI): ${analyte.cvi}%\n`;
+    report += `Between-Subject CV (CVG): ${analyte.cvg}%\n`;
+    report += `Analytical CV (CVA): ${analyte.cva}%\n\n`;
+
+    if (results) {
+      report += `CALCULATED REFERENCE INTERVALS\n`;
+      report += `${'='.repeat(80)}\n\n`;
+      report += `PRIMARY RESULTS\n`;
+      report += `${'-'.repeat(80)}\n`;
+      report += `Population Set Point (PSP): ${results.psp} ${analyte.unit}\n`;
+      report += `Reference Interval: ${results.lowerLimit} - ${results.upperLimit} ${analyte.unit}\n`;
+      report += `  Lower Limit: ${results.lowerLimit} ${analyte.unit}\n`;
+      report += `  Upper Limit: ${results.upperLimit} ${analyte.unit}\n`;
+      report += `Range Width: ${results.range} ${analyte.unit}\n\n`;
+      report += `VARIATION COMPONENTS\n`;
+      report += `${'-'.repeat(80)}\n`;
+      report += `Population CV (CVPop): ${results.cvPop}%\n`;
+      report += `Total Variation around PSP (TVPsp): ${results.tvPsp}%\n\n`;
+      report += `DESCRIPTIVE STATISTICS\n`;
+      report += `${'-'.repeat(80)}\n`;
+      report += `Mean: ${results.mean} ${analyte.unit}\n`;
+      report += `Median: ${results.median} ${analyte.unit}\n`;
+      report += `Standard Deviation: ${results.stdDev} ${analyte.unit}\n`;
+      report += `Coefficient of Variation: ${results.cv}%\n\n`;
+      report += `VALIDATION METRICS\n`;
+      report += `${'-'.repeat(80)}\n`;
+      report += `Sample Size (n): ${results.nSamples} individuals\n`;
+      report += `Minimum Recommended Sample Size: ${results.minSamples} individuals\n`;
+      report += `Status: ${results.nSamples >= results.minSamples ? 'PASSED' : 'WARNING'}\n\n`;
+      report += `COVERAGE ANALYSIS\n`;
+      report += `${'-'.repeat(80)}\n`;
+      report += `Values Within Interval: ${results.withinInterval} / ${results.nSamples}\n`;
+      report += `Coverage Rate: ${results.coverageRate}%\n`;
+      report += `Expected Coverage: 90%\n\n`;
+      report += `REFERENCE VALUES\n`;
+      report += `${'-'.repeat(80)}\n`;
+      
+      analyte.referenceValues.forEach((val, idx) => {
+        const numVal = parseFloat(val);
+        const isWithin = numVal >= parseFloat(results.lowerLimit) && numVal <= parseFloat(results.upperLimit);
+        report += `Sample ${(idx + 1).toString().padStart(3, ' ')}: ${parseFloat(val).toFixed(3)} ${isWithin ? 'Within RI' : 'Outside RI'}\n`;
+      });
+
+      report += `\n${'='.repeat(80)}\n`;
+      report += `END OF REPORT\n`;
+      report += `${'='.repeat(80)}\n`;
+    }
+
+    const blob = new Blob([report], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${analyte.name}_BV_Report_${new Date().toISOString().split('T')[0]}.txt`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const exportToExcel = () => {
+    const analyte = analytes[activeAnalyte];
+    let csvContent = `BV-Based Reference Interval Report\n`;
+    csvContent += `Generated,${new Date().toLocaleString()}\n\n`;
+    csvContent += `Analyte,${analyte.name}\n`;
+    csvContent += `Unit,${analyte.unit}\n`;
+    csvContent += `Distribution,${analyte.distribution}\n\n`;
+    csvContent += `Biological Variation Data\n`;
+    csvContent += `Within-subject CV (CVI),${analyte.cvi}%\n`;
+    csvContent += `Between-subject CV (CVG),${analyte.cvg}%\n`;
+    csvContent += `Analytical CV (CVA),${analyte.cva}%\n\n`;
+    
+    if (results) {
+      csvContent += `Results\n`;
+      csvContent += `Population Set Point (PSP),${results.psp}\n`;
+      csvContent += `Lower Limit,${results.lowerLimit}\n`;
+      csvContent += `Upper Limit,${results.upperLimit}\n`;
+      csvContent += `Reference Interval,"${results.lowerLimit} - ${results.upperLimit}"\n`;
+      csvContent += `Range,${results.range}\n`;
+      csvContent += `CVPop,${results.cvPop}%\n`;
+      csvContent += `TVPsp,${results.tvPsp}%\n`;
+      csvContent += `Mean,${results.mean}\n`;
+      csvContent += `Median,${results.median}\n`;
+      csvContent += `Standard Deviation,${results.stdDev}\n`;
+      csvContent += `CV,${results.cv}%\n`;
+      csvContent += `Sample Size,${results.nSamples}\n`;
+      csvContent += `Minimum Recommended,${results.minSamples}\n`;
+      csvContent += `Coverage Rate,${results.coverageRate}%\n\n`;
+    }
+    
+    csvContent += `Reference Values\n`;
+    csvContent += `Sample,Value,Within Interval\n`;
+    analyte.referenceValues.forEach((v, i) => {
+      const numVal = parseFloat(v);
+      const isWithin = results ? (numVal >= parseFloat(results.lowerLimit) && numVal <= parseFloat(results.upperLimit)) : '';
+      csvContent += `${i + 1},${v},${isWithin ? 'Yes' : 'No'}\n`;
+    });
+
+    const blob = new Blob([csvContent], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${analyte.name}_BV_Reference_Interval.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const exportAllAnalytes = () => {
+    let csvContent = `BV-Based Reference Intervals - All Analytes Summary\n`;
+    csvContent += `Generated,${new Date().toLocaleString()}\n\n`;
+    csvContent += `Analyte,Unit,CVI%,CVG%,CVA%,n,PSP,Lower Limit,Upper Limit,Range,Coverage%\n`;
+    
+    analytes.forEach(analyte => {
+      if (analyte.referenceValues.length === 0) return;
+      
+      const values = analyte.referenceValues.map(v => parseFloat(v)).filter(v => !isNaN(v));
+      const n = values.length;
+      const cvi = analyte.cvi / 100;
+      const cvg = analyte.cvg / 100;
+      const cva = analyte.cva / 100;
+      
+      const mean = values.reduce((sum, v) => sum + v, 0) / n;
+      const cvPop = Math.sqrt(((n + 1) / n) * (cvi ** 2 + cvg ** 2 + cva ** 2));
+      const tvPsp = 1.96 * cvPop;
+      const lowerLimit = mean - (mean * tvPsp);
+      const upperLimit = mean + (mean * tvPsp);
+      const withinInterval = values.filter(v => v >= lowerLimit && v <= upperLimit).length;
+      const coverageRate = (withinInterval / n) * 100;
+      
+      csvContent += `${analyte.name},${analyte.unit},${analyte.cvi},${analyte.cvg},${analyte.cva},${n},${mean.toFixed(3)},${lowerLimit.toFixed(3)},${upperLimit.toFixed(3)},${(upperLimit - lowerLimit).toFixed(3)},${coverageRate.toFixed(1)}\n`;
+    });
+
+    const blob = new Blob([csvContent], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `BV_All_Analytes_Summary_${new Date().toISOString().split('T')[0]}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const currentAnalyte = analytes[activeAnalyte];
+
+  const getChartData = () => {
+    if (!results) return { histogram: [], scatter: [] };
+    
+    const values = results.rawValues;
+    const sorted = [...values].sort((a, b) => a - b);
+    
+    const binCount = Math.min(10, Math.ceil(Math.sqrt(values.length)));
+    const min = Math.min(...values);
+    const max = Math.max(...values);
+    const binWidth = (max - min) / binCount;
+    
+    const histogram = Array(binCount).fill(0).map((_, i) => {
+      const binStart = min + i * binWidth;
+      const binEnd = binStart + binWidth;
+      const count = values.filter(v => v >= binStart && v < binEnd).length;
+      return {
+        bin: `${binStart.toFixed(1)}-${binEnd.toFixed(1)}`,
+        count: count,
+        binCenter: (binStart + binEnd) / 2
+      };
+    });
+    
+    const scatter = values.map((v, i) => ({
+      index: i + 1,
+      value: v,
+      withinRI: v >= parseFloat(results.lowerLimit) && v <= parseFloat(results.upperLimit)
+    }));
+    
+    return { histogram, scatter };
+  };
+
+  const chartData = getChartData();
+
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 p-4">
+      <div className="max-w-7xl mx-auto">
+        <div className="bg-white rounded-2xl shadow-2xl overflow-hidden">
+          <div className="bg-gradient-to-r from-blue-600 to-indigo-600 p-6 text-white">
+            <div className="flex items-center justify-between flex-wrap gap-4">
+              <div>
+                <h1 className="text-3xl font-bold flex items-center gap-3">
+                  <Calculator className="w-8 h-8" />
+                  BV-Based Reference Interval Calculator
+                </h1>
+                <p className="text-blue-100 mt-2">Dr. Coskun Method - Clinical Chemistry & Laboratory Medicine</p>
+              </div>
+              <div className="flex gap-2 flex-wrap">
+                <button
+                  onClick={resetCurrentAnalyte}
+                  className="bg-orange-500 text-white px-4 py-2 rounded-lg font-semibold hover:bg-orange-600 transition flex items-center gap-2"
+                >
+                  <RotateCcw className="w-5 h-5" />
+                  Reset Current
+                </button>
+                <button
+                  onClick={resetAll}
+                  className="bg-red-500 text-white px-4 py-2 rounded-lg font-semibold hover:bg-red-600 transition flex items-center gap-2"
+                >
+                  <RotateCcw className="w-5 h-5" />
+                  Reset All
+                </button>
+                <button
+                  onClick={saveToCloud}
+                  className="bg-white text-blue-600 px-4 py-2 rounded-lg font-semibold hover:bg-blue-50 transition flex items-center gap-2"
+                >
+                  <Save className="w-5 h-5" />
+                  Save to Cloud
+                </button>
+              </div>
+            </div>
+            {saveMessage && (
+              <div className="mt-3 bg-white bg-opacity-20 backdrop-blur rounded-lg px-4 py-2 text-sm">
+                {saveMessage}
+              </div>
+            )}
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 p-6">
+            <div className="lg:col-span-1 space-y-4">
+              <div className="flex justify-between items-center">
+                <h2 className="text-xl font-bold text-gray-800">Analytes</h2>
+                <button
+                  onClick={addAnalyte}
+                  className="bg-blue-600 text-white p-2 rounded-lg hover:bg-blue-700 transition"
+                >
+                  <Plus className="w-5 h-5" />
+                </button>
+              </div>
+              
+              <div className="space-y-2 max-h-96 overflow-y-auto">
+                {analytes.map((analyte, index) => (
+                  <div
+                    key={analyte.id}
+                    className={`p-3 rounded-lg cursor-pointer transition flex justify-between items-center ${
+                      index === activeAnalyte
+                        ? 'bg-blue-100 border-2 border-blue-500'
+                        : 'bg-gray-50 hover:bg-gray-100'
+                    }`}
+                    onClick={() => setActiveAnalyte(index)}
+                  >
+                    <div>
+                      <div className="font-semibold text-gray-800">{analyte.name}</div>
+                      <div className="text-sm text-gray-500">{analyte.unit} (n={analyte.referenceValues.length})</div>
+                    </div>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        removeAnalyte(index);
+                      }}
+                      className="text-red-500 hover:text-red-700 p-1"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+
+              {analytes.length > 1 && (
+                <button
+                  onClick={exportAllAnalytes}
+                  className="w-full bg-green-600 text-white py-2 rounded-lg hover:bg-green-700 transition flex items-center justify-center gap-2 text-sm"
+                >
+                  <Download className="w-4 h-4" />
+                  Export All Analytes
+                </button>
+              )}
+            </div>
+
+            <div className="lg:col-span-1 space-y-4">
+              <h2 className="text-xl font-bold text-gray-800">Analyte Configuration</h2>
+              
+              <div className="space-y-3">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Analyte Name
+                  </label>
+                  <input
+                    type="text"
+                    value={currentAnalyte.name}
+                    onChange={(e) => updateAnalyte('name', e.target.value)}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Unit
+                  </label>
+                  <input
+                    type="text"
+                    value={currentAnalyte.unit}
+                    onChange={(e) => updateAnalyte('unit', e.target.value)}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    placeholder="e.g., mg/dL, mmol/L"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Distribution Type
+                  </label>
+                  <select
+                    value={currentAnalyte.distribution}
+                    onChange={(e) => updateAnalyte('distribution', e.target.value)}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  >
+                    <option value="normal">Normal</option>
+                    <option value="log-normal">Log-Normal</option>
+                  </select>
+                </div>
+
+                <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 mb-3">
+                  <div className="flex items-start gap-2">
+                    <AlertCircle className="w-5 h-5 text-blue-600 flex-shrink-0 mt-0.5" />
+                    <div className="text-sm">
+                      <p className="font-semibold text-blue-800 mb-1">Find BV Data for Your Analyte</p>
+                      <p className="text-blue-700 mb-2">
+                        Search the EFLM Biological Variation Database to get CVI, CVG, and CVA values:
+                      </p>
+                      <a
+                        href="https://biologicalvariation.eu/"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-2 bg-blue-600 text-white px-3 py-2 rounded-lg hover:bg-blue-700 transition text-sm font-medium"
+                      >
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                        </svg>
+                        Search BV Database
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                        </svg>
+                      </a>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-3 gap-2">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      CVI (%)
+                    </label>
+                    <input
+                      type="number"
+                      step="0.1"
+                      value={currentAnalyte.cvi}
+                      onChange={(e) => updateAnalyte('cvi', parseFloat(e.target.value) || 0)}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      CVG (%)
+                    </label>
+                    <input
+                      type="number"
+                      step="0.1"
+                      value={currentAnalyte.cvg}
+                      onChange={(e) => updateAnalyte('cvg', parseFloat(e.target.value) || 0)}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      CVA (%)
+                    </label>
+                    <input
+                      type="number"
+                      step="0.1"
+                      value={currentAnalyte.cva}
+                      onChange={(e) => updateAnalyte('cva', parseFloat(e.target.value) || 0)}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    />
+                  </div>
+                </div>
+
+                <div className="pt-4">
+                  <div className="flex justify-between items-center mb-2">
+                    <label className="block text-sm font-medium text-gray-700">
+                      Reference Values (n={currentAnalyte.referenceValues.length})
+                    </label>
+                    <div className="flex gap-2">
+                      <label className="bg-gray-600 text-white px-3 py-1 rounded text-sm cursor-pointer hover:bg-gray-700 flex items-center gap-1">
+                        <Upload className="w-4 h-4" />
+                        Import
+                        <input
+                          type="file"
+                          accept=".csv,.txt"
+                          onChange={importCSV}
+                          className="hidden"
+                        />
+                      </label>
+                      <button
+                        onClick={addReferenceValue}
+                        className="bg-blue-600 text-white px-3 py-1 rounded text-sm hover:bg-blue-700 flex items-center gap-1"
+                      >
+                        <Plus className="w-4 h-4" />
+                        Add
+                      </button>
+                    </div>
+                  </div>
+                  
+                  <div className="max-h-64 overflow-y-auto space-y-2 bg-gray-50 p-3 rounded-lg">
+                    {currentAnalyte.referenceValues.length === 0 ? (
+                      <p className="text-gray-500 text-sm text-center py-4">
+                        No reference values added. Add at least 6 values (recommended: 16+)
+                      </p>
+                    ) : (
+                      currentAnalyte.referenceValues.map((value, index) => (
+                        <div key={index} className="flex gap-2">
+                          <input
+                            type="number"
+                            step="0.01"
+                            value={value}
+                            onChange={(e) => updateReferenceValue(index, e.target.value)}
+                            placeholder={`Value ${index + 1}`}
+                            className="flex-1 px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                          />
+                          <button
+                            onClick={() => removeReferenceValue(index)}
+                            className="text-red-500 hover:text-red-700 p-2"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </div>
+
+                <button
+                  onClick={calculateReference}
+                  className="w-full bg-gradient-to-r from-blue-600 to-indigo-600 text-white py-3 rounded-lg font-semibold hover:from-blue-700 hover:to-indigo-700 transition flex items-center justify-center gap-2"
+                >
+                  <Calculator className="w-5 h-5" />
+                  Calculate Reference Interval
+                </button>
+              </div>
+            </div>
+
+            <div className="lg:col-span-1 space-y-4">
+              <div className="flex justify-between items-center">
+                <h2 className="text-xl font-bold text-gray-800">Results</h2>
+                {results && (
+                  <div className="flex gap-2">
+                    <button
+                      onClick={exportToExcel}
+                      className="bg-green-600 text-white px-3 py-2 rounded-lg hover:bg-green-700 transition flex items-center gap-2 text-sm"
+                    >
+                      <Download className="w-4 h-4" />
+                      CSV
+                    </button>
+                    <button
+                      onClick={exportComprehensiveReport}
+                      className="bg-purple-600 text-white px-3 py-2 rounded-lg hover:bg-purple-700 transition flex items-center gap-2 text-sm"
+                    >
+                      <FileText className="w-4 h-4" />
+                      Report
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              {!results ? (
+                <div className="bg-gray-50 rounded-lg p-8 text-center">
+                  <FileText className="w-16 h-16 text-gray-300 mx-auto mb-4" />
+                  <p className="text-gray-500">
+                    Configure your analyte and calculate to see results
+                  </p>
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  {results.nSamples < results.minSamples && (
+                    <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 flex items-start gap-3">
+                      <AlertCircle className="w-5 h-5 text-yellow-600 flex-shrink-0 mt-0.5" />
+                      <div className="text-sm">
+                        <p className="font-semibold text-yellow-800">Sample Size Warning</p>
+                        <p className="text-yellow-700">
+                          Current: {results.nSamples} samples. Recommended: {results.minSamples}+ samples for optimal reliability.
+                        </p>
+                      </div>
+                    </div>
+                  )}
+
+                  {results.nSamples >= results.minSamples && (
+                    <div className="bg-green-50 border border-green-200 rounded-lg p-4 flex items-start gap-3">
+                      <CheckCircle className="w-5 h-5 text-green-600 flex-shrink-0 mt-0.5" />
+                      <div className="text-sm">
+                        <p className="font-semibold text-green-800">Validation Passed</p>
+                        <p className="text-green-700">
+                          Sample size meets requirements ({results.nSamples} &gt;= {results.minSamples})
+                        </p>
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="bg-gradient-to-br from-blue-50 to-indigo-50 rounded-lg p-6 border-2 border-blue-200">
+                    <h3 className="font-bold text-lg text-gray-800 mb-4">Reference Interval</h3>
+                    <div className="text-center">
+                      <div className="text-4xl font-bold text-blue-600 mb-2">
+                        {results.lowerLimit} - {results.upperLimit}
+                      </div>
+                      <div className="text-gray-600">{currentAnalyte.unit}</div>
+                      <div className="mt-3 text-sm text-gray-500">
+                        Coverage: {results.coverageRate}% ({results.withinInterval}/{results.nSamples})
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="space-y-3">
+                    <div className="bg-white border border-gray-200 rounded-lg p-4">
+                      <div className="text-sm text-gray-600">Population Set Point (PSP)</div>
+                      <div className="text-2xl font-bold text-gray-800">{results.psp}</div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="bg-white border border-gray-200 rounded-lg p-3">
+                        <div className="text-xs text-gray-600">Lower Limit</div>
+                        <div className="text-xl font-bold text-gray-800">{results.lowerLimit}</div>
+                      </div>
+                      <div className="bg-white border border-gray-200 rounded-lg p-3">
+                        <div className="text-xs text-gray-600">Upper Limit</div>
+                        <div className="text-xl font-bold text-gray-800">{results.upperLimit}</div>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="bg-white border border-gray-200 rounded-lg p-3">
+                        <div className="text-xs text-gray-600">CVPop</div>
+                        <div className="text-lg font-bold text-gray-800">{results.cvPop}%</div>
+                      </div>
+                      <div className="bg-white border border-gray-200 rounded-lg p-3">
+                        <div className="text-xs text-gray-600">TVPsp</div>
+                        <div className="text-lg font-bold text-gray-800">{results.tvPsp}%</div>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-3 gap-2">
+                      <div className="bg-white border border-gray-200 rounded-lg p-2">
+                        <div className="text-xs text-gray-600">Mean</div>
+                        <div className="text-sm font-bold text-gray-800">{results.mean}</div>
+                      </div>
+                      <div className="bg-white border border-gray-200 rounded-lg p-2">
+                        <div className="text-xs text-gray-600">Median</div>
+                        <div className="text-sm font-bold text-gray-800">{results.median}</div>
+                      </div>
+                      <div className="bg-white border border-gray-200 rounded-lg p-2">
+                        <div className="text-xs text-gray-600">SD</div>
+                        <div className="text-sm font-bold text-gray-800">{results.stdDev}</div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <button
+                    onClick={() => setShowGraphs(!showGraphs)}
+                    className="w-full bg-indigo-600 text-white py-2 rounded-lg hover:bg-indigo-700 transition flex items-center justify-center gap-2"
+                  >
+                    <BarChart3 className="w-5 h-5" />
+                    {showGraphs ? 'Hide' : 'Show'} Graphical Analysis
+                  </button>
+
+                  {showGraphs && (
+                    <div className="space-y-4">
+                      <div className="bg-white border border-gray-200 rounded-lg p-4">
+                        <h3 className="font-semibold text-gray-800 mb-3 flex items-center gap-2">
+                          <TrendingUp className="w-5 h-5" />
+                          Distribution Histogram
+                        </h3>
+                        <ResponsiveContainer width="100%" height={200}>
+                          <BarChart data={chartData.histogram}>
+                            <CartesianGrid strokeDasharray="3 3" />
+                            <XAxis dataKey="bin" angle={-45} textAnchor="end" height={70} fontSize={10} />
+                            <YAxis />
+                            <Tooltip />
+                            <Bar dataKey="count" fill="#3b82f6" />
+                          </BarChart>
+                        </ResponsiveContainer>
+                      </div>
+
+                      <div className="bg-white border border-gray-200 rounded-lg p-4">
+                        <h3 className="font-semibold text-gray-800 mb-3 flex items-center gap-2">
+                          <BarChart3 className="w-5 h-5" />
+                          Reference Value Distribution
+                        </h3>
+                        <ResponsiveContainer width="100%" height={200}>
+                          <ScatterChart>
+                            <CartesianGrid strokeDasharray="3 3" />
+                            <XAxis dataKey="index" label={{ value: 'Sample', position: 'insideBottom', offset: -5 }} />
+                            <YAxis label={{ value: currentAnalyte.unit, angle: -90, position: 'insideLeft' }} />
+                            <Tooltip />
+                            <ReferenceLine y={parseFloat(results.lowerLimit)} stroke="red" strokeDasharray="3 3" label="LL" />
+                            <ReferenceLine y={parseFloat(results.upperLimit)} stroke="red" strokeDasharray="3 3" label="UL" />
+                            <ReferenceLine y={parseFloat(results.psp)} stroke="green" strokeDasharray="3 3" label="PSP" />
+                            <Scatter data={chartData.scatter} fill="#8b5cf6" />
+                          </ScatterChart>
+                        </ResponsiveContainer>
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="bg-gray-50 rounded-lg p-4 text-xs text-gray-600">
+                    <p className="font-semibold mb-1">Methodology:</p>
+                    <p>Based on Dr. Abdurrahman Coskun BV-based population reference interval model (Clinical Chemistry, 2024). Uses biological variation data to define reference limits around the population set point.</p>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div className="bg-gray-50 border-t border-gray-200 p-4 text-center text-sm text-gray-600">
+            <p>
+              BV-Based Reference Interval Calculator | Based on: Coskun et al., Clinical Chemistry 2024;70(10):1279-1290
+            </p>
+            <p className="mt-1 text-xs">
+              Data sources: EFLM Biological Variation Database | CVI: Within-subject | CVG: Between-subject | CVA: Analytical
+            </p>
+            <p className="mt-2 text-xs font-semibold text-gray-700">
+              © Copyright {new Date().getFullYear()} Raafat ElShimy. All rights reserved.
+            </p>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export default BVReferenceIntervalTool;
